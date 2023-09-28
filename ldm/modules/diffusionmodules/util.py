@@ -55,22 +55,22 @@ def make_ddim_timesteps(ddim_discr_method, num_ddim_timesteps, num_ddpm_timestep
     # assert ddim_timesteps.shape[0] == num_ddim_timesteps
     # add one to get the final alpha values right (the ones from first scale to data during sampling)
     steps_out = ddim_timesteps + 1
-    if verbose:
-        print(f'Selected timesteps for ddim sampler: {steps_out}')
+    # if verbose:
+        # print(f'Selected timesteps for ddim sampler: {steps_out}')
     return steps_out
 
 
 def make_ddim_sampling_parameters(alphacums, ddim_timesteps, eta, verbose=True):
     # select alphas for computing the variance schedule
-    alphas = alphacums[ddim_timesteps]
-    alphas_prev = np.asarray([alphacums[0]] + alphacums[ddim_timesteps[:-1]].tolist())
+    alphas = alphacums[ddim_timesteps[:-1]]
+    alphas_prev = np.asarray([alphacums[0]] + alphacums[ddim_timesteps[:-2]].tolist())
 
     # according the the formula provided in https://arxiv.org/abs/2010.02502
     sigmas = eta * np.sqrt((1 - alphas_prev) / (1 - alphas) * (1 - alphas / alphas_prev))
-    if verbose:
-        print(f'Selected alphas for ddim sampler: a_t: {alphas}; a_(t-1): {alphas_prev}')
-        print(f'For the chosen value of eta, which is {eta}, '
-              f'this results in the following sigma_t schedule for ddim sampler {sigmas}')
+    # if verbose:
+        # print(f'Selected alphas for ddim sampler: a_t: {alphas}; a_(t-1): {alphas_prev}')
+        # print(f'For the chosen value of eta, which is {eta}, '
+        #       f'this results in the following sigma_t schedule for ddim sampler {sigmas}')
     return sigmas, alphas, alphas_prev
 
 
@@ -122,7 +122,9 @@ class CheckpointFunction(torch.autograd.Function):
         ctx.run_function = run_function
         ctx.input_tensors = list(args[:length])
         ctx.input_params = list(args[length:])
-
+        ctx.gpu_autocast_kwargs = {"enabled": torch.is_autocast_enabled(),
+                                   "dtype": torch.get_autocast_gpu_dtype(),
+                                   "cache_enabled": torch.is_autocast_cache_enabled()}
         with torch.no_grad():
             output_tensors = ctx.run_function(*ctx.input_tensors)
         return output_tensors
@@ -130,7 +132,8 @@ class CheckpointFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *output_grads):
         ctx.input_tensors = [x.detach().requires_grad_(True) for x in ctx.input_tensors]
-        with torch.enable_grad():
+        with torch.enable_grad(), \
+                torch.cuda.amp.autocast(**ctx.gpu_autocast_kwargs):
             # Fixes a bug where the first op in run_function modifies the
             # Tensor storage in place, which is not allowed for detach()'d
             # Tensors.
