@@ -36,7 +36,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--IF', action='store_true', help="experimental: use DeepFloyd IF as the guidance model for nerf stage")
 
-    parser.add_argument('--guidance', type=str, nargs='*', default=['SD'], help='guidance model')
+    parser.add_argument('--guidance', type=str, nargs='*', default=['CN'], help='guidance model')
     parser.add_argument('--guidance_scale', type=float, default=100, help="diffusion model classifier-free guidance scale")
 
     parser.add_argument('--save_mesh', action='store_true', help="export an obj mesh with texture")
@@ -380,6 +380,10 @@ if __name__ == '__main__':
         if 'SD' in opt.guidance:
             from guidance.sd_utils import StableDiffusion
             guidance['SD'] = StableDiffusion(device, opt.fp16, opt.vram_O, opt.sd_version, opt.hf_key, opt.t_range)
+
+        if 'CN' in opt.guidance:
+            from guidance.cn_scribble_utils import ControlNet
+            guidance['CN'] = ControlNet(device, opt.fp16, opt.vram_O, opt.sd_version, opt.hf_key, opt.t_range)
 
         if 'IF' in opt.guidance:
             from guidance.if_utils import IF

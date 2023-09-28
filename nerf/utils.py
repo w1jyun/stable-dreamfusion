@@ -362,6 +362,13 @@ class Trainer(object):
                 for d in ['front', 'side', 'back']:
                     self.embeddings['SD'][d] = self.guidance['SD'].get_text_embeds([f"{self.opt.text}, {d} view"])
 
+            if 'CN' in self.guidance:
+                self.embeddings['CN']['default'] = self.guidance['CN'].get_text_embeds([self.opt.text])
+                self.embeddings['CN']['uncond'] = self.guidance['CN'].get_text_embeds([self.opt.negative])
+
+                for d in ['front', 'side', 'back']:
+                    self.embeddings['CN'][d] = self.guidance['CN'].get_text_embeds([f"{self.opt.text}, {d} view"])
+
             if 'IF' in self.guidance:
                 self.embeddings['IF']['default'] = self.guidance['IF'].get_text_embeds([self.opt.text])
                 self.embeddings['IF']['uncond'] = self.guidance['IF'].get_text_embeds([self.opt.negative])
@@ -630,6 +637,31 @@ class Trainer(object):
                 else:
                     loss = loss + self.guidance['SD'].train_step(text_z, pred_rgb, as_latent=as_latent, guidance_scale=self.opt.guidance_scale, grad_scale=self.opt.lambda_guidance,
                                                                 save_guidance_path=save_guidance_path)
+
+            if 'CN' in self.guidance:
+                # interpolate text_z
+                azimuth = data['azimuth'] # [-180, 180]
+                control = data['control']
+                text_z = self.embeddings['CN']['default']
+                for b in range(azimuth.shape[0]):
+                    if azimuth[b] >= -90 and azimuth[b] < 90:
+                        if azimuth[b] >= 0:
+                            r = 1 - azimuth[b] / 90
+                        else:
+                            r = 1 + azimuth[b] / 90
+                        start_z = self.embeddings['SD']['front']
+                        end_z = self.embeddings['SD']['side']
+                    else:
+                        if azimuth[b] >= 0:
+                            r = 1 - (azimuth[b] - 90) / 90
+                        else:
+                            r = 1 + (azimuth[b] + 90) / 90
+                        start_z = self.embeddings['SD']['side']
+                        end_z = self.embeddings['SD']['back']
+                    text_z.append(r * start_z + (1 - r) * end_z)
+                uncond = self.embeddings['CN']['uncond']
+                # ENHANCE: remove loop to handle batch size > 1
+                loss = loss + self.guidance['CN'].train_step(text_z, uncond, pred_rgb, control, epoch, guidance_scale=self.opt.guidance_scale, save_guidance_path=save_guidance_path)
 
             if 'IF' in self.guidance:
                 # interpolate text_z

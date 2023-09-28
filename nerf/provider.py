@@ -14,6 +14,39 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import get_rays, safe_normalize
+from .renderer_model import rederModel
+import einops
+
+def HWC3(x):
+    assert x.dtype == np.uint8
+    if x.ndim == 2:
+        x = x[:, :, None]
+    assert x.ndim == 3
+    H, W, C = x.shape
+    assert C == 1 or C == 3 or C == 4
+    if C == 3:
+        return x
+    if C == 1:
+        return np.concatenate([x, x, x], axis=2)
+    if C == 4:
+        color = x[:, :, 0:3].astype(np.float32)
+        alpha = x[:, :, 3:4].astype(np.float32) / 255.0
+        y = color * alpha + 255.0 * (1.0 - alpha)
+        y = y.clip(0, 255).astype(np.uint8)
+        return y
+
+
+def resize_image(input_image, resolution):
+    H, W, C = input_image.shape
+    H = float(H)
+    W = float(W)
+    k = float(resolution) / min(H, W)
+    H *= k
+    W *= k
+    H = int(np.round(H / 64.0)) * 64
+    W = int(np.round(W / 64.0)) * 64
+    img = cv2.resize(input_image, (W, H), interpolation=cv2.INTER_LANCZOS4 if k > 1 else cv2.INTER_AREA)
+    return img
 
 DIR_COLORS = np.array([
     [255, 0, 0, 255], # front
@@ -256,6 +289,17 @@ class NeRFDataset:
             # random focal
             fov = random.random() * (self.opt.fovy_range[1] - self.opt.fovy_range[0]) + self.opt.fovy_range[0]
 
+            input_image = rederModel(poses, self.opt.init_with)
+            img = resize_image(HWC3(input_image), 512)
+
+            detected_map = np.zeros_like(img, dtype=np.uint8)
+            detected_map[np.min(img, axis=2) < 127] = 255
+
+            control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
+            control = torch.stack([control], dim=0)
+            control = einops.rearrange(control, 'b h w c -> b c h w').clone()
+
+
         elif self.type == 'six_views':
             # six views
             thetas_six = [90, 90,  90,  90, 1e-3, 179.999]
@@ -306,6 +350,7 @@ class NeRFDataset:
             'rays_d': rays['rays_d'],
             'dir': dirs,
             'mvp': mvp,
+            'control': control,
             'polar': delta_polar,
             'azimuth': delta_azimuth,
             'radius': delta_radius,
