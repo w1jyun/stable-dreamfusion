@@ -649,19 +649,19 @@ class Trainer(object):
                             r = 1 - azimuth[b] / 90
                         else:
                             r = 1 + azimuth[b] / 90
-                        start_z = self.embeddings['SD']['front']
-                        end_z = self.embeddings['SD']['side']
+                        start_z = self.embeddings['CN']['front'][0]
+                        end_z = self.embeddings['CN']['side'][0]
                     else:
                         if azimuth[b] >= 0:
                             r = 1 - (azimuth[b] - 90) / 90
                         else:
                             r = 1 + (azimuth[b] + 90) / 90
-                        start_z = self.embeddings['SD']['side']
-                        end_z = self.embeddings['SD']['back']
+                        start_z = self.embeddings['CN']['side'][0]
+                        end_z = self.embeddings['CN']['back'][0]
                     text_z.append(r * start_z + (1 - r) * end_z)
                 uncond = self.embeddings['CN']['uncond']
                 # ENHANCE: remove loop to handle batch size > 1
-                loss = loss + self.guidance['CN'].train_step(text_z, uncond, pred_rgb, control, epoch, guidance_scale=self.opt.guidance_scale, save_guidance_path=save_guidance_path)
+                loss = loss + self.guidance['CN'].train_step(text_z, uncond, pred_rgb, control, self.epoch, as_latent, guidance_scale=self.opt.guidance_scale, save_guidance_path=save_guidance_path)
 
             if 'IF' in self.guidance:
                 # interpolate text_z

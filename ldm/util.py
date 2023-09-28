@@ -1,41 +1,11 @@
 import importlib
 
-import torchvision
 import torch
 from torch import optim
 import numpy as np
 
 from inspect import isfunction
 from PIL import Image, ImageDraw, ImageFont
-
-import os
-import numpy as np
-import matplotlib.pyplot as plt
-from PIL import Image
-import torch
-import time
-import cv2
-
-import PIL
-
-def pil_rectangle_crop(im):
-    width, height = im.size   # Get dimensions
-    
-    if width <= height:
-        left = 0
-        right = width
-        top = (height - width)/2
-        bottom = (height + width)/2
-    else:
-        
-        top = 0
-        bottom = height
-        left = (width - height) / 2
-        bottom = (width + height) / 2
-
-    # Crop the center of the image
-    im = im.crop((left, top, right, bottom))
-    return im
 
 
 def log_txt_as_img(wh, xc, size=10):
@@ -46,7 +16,7 @@ def log_txt_as_img(wh, xc, size=10):
     for bi in range(b):
         txt = Image.new("RGB", wh, color="white")
         draw = ImageDraw.Draw(txt)
-        font = ImageFont.truetype('data/DejaVuSans.ttf', size=size)
+        font = ImageFont.truetype('font/DejaVuSans.ttf', size=size)
         nc = int(40 * (wh[0] / 256))
         lines = "\n".join(xc[bi][start:start + nc] for start in range(0, len(xc[bi]), nc))
 

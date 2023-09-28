@@ -6,17 +6,18 @@ import torch.nn.functional as F
 from torch.cuda.amp import custom_bwd, custom_fwd 
 # ControlNet
 from cldm.cldm import ControlledUnetModel, ControlLDM
-from ldm.models.autoencoder import AutoencoderKL
-# from diffusers import DDIMScheduler
+# from ldm.models.autoencoder import AutoencoderKL
+# from diffusers import AutoencoderKL
+
 from torchvision.utils import save_image
 import numpy as np
 from PIL import Image
-from dreamtime import Timestep
+from .dreamtime import Timestep
 from safetensors.torch import load_file
 
 from cldm.ddim_hacked import DDIMSampler
 from cldm.model import create_model, load_state_dict
-from .perpneg_utils import weighted_perpendicular_aggregator
+# from .perpneg_utils import weighted_perpendicular_aggregator
 from pathlib import Path
 
 class SpecifyGradient(torch.autograd.Function):
@@ -41,15 +42,15 @@ def seed_everything(seed):
     #torch.backends.cudnn.benchmark = True
 
 class ControlNet(nn.Module):
-    def __init__(self, device, iters, sd_version='2.1', hf_key=None):
+    def __init__(self, device, iters):
         super().__init__()
-        self.device = device
         torch.cuda.empty_cache()
+        self.device = device
+        # model_key = "runwayml/stable-diffusion-v1-5"
+        # self.vae = AutoencoderKL.from_pretrained(model_key, subfolder="vae").to(self.device)
         model = create_model('./models/cldm_v15.yaml').cpu()
         model.load_state_dict(load_state_dict('./models/control_sd15_scribble.pth', location='cuda'))
-        model = model.cuda()
-        self.model = model
-        self.vae = AutoencoderKL.init_from_ckpt('./models/control_sd15_scribble.pth')
+        self.model = model.cuda()
         self.ddim_sampler = DDIMSampler(model)
         self.num_train_timesteps = 1000
         self.a_prompt = None
@@ -63,8 +64,8 @@ class ControlNet(nn.Module):
     @torch.no_grad()
     def get_text_embeds(self, prompt):
         # prompt: [str]
-        embeddings = self.model.get_learned_conditioning([prompt]).detach()
-        return embeddings
+        embeddings = self.model.get_learned_conditioning(prompt).detach()
+        return [embeddings]
     
         # To support classifier-free guidance, randomly drop out only text conditioning 5%, only image conditioning 5%, and both 5%.
         # random = torch.rand(x.size(0), device=x.device)
@@ -106,10 +107,17 @@ class ControlNet(nn.Module):
         return extra_step_kwargs
     
     # text_z, uncond, pred_rgb, control, guidance_scale=self.opt.guidance_scale, save_guidance_path=save_guidance_path)
-    def train_step(self, text_z, uncond, pred_rgb, control, epoch, guidance_scale=100, save_guidance_path:Path=None):
+    def train_step(self, text_z, uncond, pred_rgb, control, epoch, as_latent, guidance_scale=100, save_guidance_path:Path=None):
+        torch.cuda.empty_cache()
         # interp to 512x512 to be fed into vae.
-        pred_rgb_512 = F.interpolate(pred_rgb, (512, 512), mode='bilinear', align_corners=False)
-        latents = self.encode_imgs(pred_rgb_512)
+        if as_latent:
+            latents = F.interpolate(pred_rgb, (64, 64), mode='bilinear', align_corners=False) * 2 - 1
+        else:
+            # interp to 512x512 to be fed into vae.
+            pred_rgb_512 = F.interpolate(pred_rgb, (512, 512), mode='bilinear', align_corners=False)
+            # encode image into latents with vae, requires grad!
+            latents = self.encode_imgs(pred_rgb_512)
+
         # timestep ~ U(0.02, 0.98) to avoid very high/low noise level
         t = torch.tensor([self.Timestep.timestep((epoch - 1) * 100 + self.index % 100)], dtype=torch.long, device=self.device)
 
@@ -118,8 +126,8 @@ class ControlNet(nn.Module):
                 noise = torch.randn_like(latents)
                 latents_noisy = self.ddim_sampler.add_noise(latents, noise, t)
                 # model.control_scales = [strength * (0.825 ** float(12 - i)) for i in range(13)] if guess_mode else ([strength] * 13)
-                cond = {"c_concat": [control], "c_crossattn": [text_z]}
-                un_cond = {"c_concat": [control], "c_crossattn": [uncond]}
+                cond = {"c_concat": [control], "c_crossattn": text_z}
+                un_cond = {"c_concat": [control], "c_crossattn": uncond}
                 x_in = torch.cat([latents_noisy])
                 noise_pred = self.ddim_sampler.model.apply_model(x_in, t, cond)
                 e_t_uncond = self.ddim_sampler.model.apply_model(x_in, t, un_cond)
@@ -132,9 +140,13 @@ class ControlNet(nn.Module):
         # since we omitted an item in grad, we need to use the custom function to specify the gradient
         if (save_guidance_path):
             with torch.no_grad():
+                if as_latent:
+                    pred_rgb_512 = self.decode_latents(latents)
+
+                result_hopefully_less_noisy_image = self.decode_latents(self.model.predict_start_from_noise(latents_noisy, t, noise_pred)) # current prediction for x_0
                 pred_minus_noise = self.decode_latents(noise_pred - noise)
-                arr = [pred_rgb_512, control, pred_minus_noise]
-                viz_images = torch.cat(arr,dim=-1)
+                arr = [pred_rgb_512, control, pred_minus_noise, result_hopefully_less_noisy_image]
+                viz_images = torch.cat(arr)
                 save_image(viz_images, save_guidance_path)
         self.index += 1
         loss = SpecifyGradient.apply(latents, grad) 
@@ -255,11 +267,10 @@ class ControlNet(nn.Module):
         return imgs # [B, 3, 256, 256] RGB space image
 
     def encode_imgs(self, imgs):
-        # imgs: [B, 3, 256, 256] RGB space image
-        # with self.model.ema_scope():
         imgs = imgs * 2 - 1
-        latents = self.model.first_stage_model.encode(imgs).sample() * 0.18215
-
+        # latents = torch.cat([self.model.get_first_stage_encoding(self.model.encode_first_stage(img[:, :3, :, :])) for img in imgs], dim=0)
+        encoder_posterior = self.model.encode_first_stage(imgs[:, :3, :, :])
+        latents = self.model.get_first_stage_encoding(encoder_posterior).detach()
         return latents # [B, 4, 32, 32] Latent space image
     
     def encode_imgs_by_sd(self, imgs):

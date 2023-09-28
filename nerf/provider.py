@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .utils import get_rays, safe_normalize
-from .renderer_model import rederModel
+from .model_renderer import ModelRenderer
 import einops
 
 def HWC3(x):
@@ -232,6 +232,7 @@ class NeRFDataset:
 
         self.near = self.opt.min_near
         self.far = 1000 # infinite
+        self.modelRenderer = ModelRenderer(opt.init_with)
 
         # [debug] visualize poses
         # poses, dirs, _, _, _ = rand_poses(100, self.device, opt, radius_range=self.opt.radius_range, angle_overhead=self.opt.angle_overhead, angle_front=self.opt.angle_front, jitter=self.opt.jitter_pose, uniform_sphere_rate=1)
@@ -281,7 +282,7 @@ class NeRFDataset:
     def collate(self, index):
 
         B = len(index)
-
+        control = None
         if self.training:
             # random pose on the fly
             poses, dirs, thetas, phis, radius = rand_poses(B, self.device, self.opt, radius_range=self.opt.radius_range, theta_range=self.opt.theta_range, phi_range=self.opt.phi_range, return_dirs=True, angle_overhead=self.opt.angle_overhead, angle_front=self.opt.angle_front, uniform_sphere_rate=self.opt.uniform_sphere_rate)
@@ -289,7 +290,7 @@ class NeRFDataset:
             # random focal
             fov = random.random() * (self.opt.fovy_range[1] - self.opt.fovy_range[0]) + self.opt.fovy_range[0]
 
-            input_image = rederModel(poses, self.opt.init_with)
+            input_image = self.modelRenderer.render(poses, fov)
             img = resize_image(HWC3(input_image), 512)
 
             detected_map = np.zeros_like(img, dtype=np.uint8)
